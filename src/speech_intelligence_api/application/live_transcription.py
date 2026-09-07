@@ -274,7 +274,7 @@ class LiveTranscriptionSession:
         snapshot_samples = len(snapshot) // _BYTES_PER_SAMPLE
         self._last_partial_samples = snapshot_samples
         try:
-            result = await self._transcribe(snapshot)
+            result = await self._transcribe(snapshot, draft=True)
         except (InvalidAudioError, UncertainLanguageError):
             return None
         if result.text == self._last_partial_text:
@@ -299,7 +299,12 @@ class LiveTranscriptionSession:
             self._last_partial_samples = 0
             self._last_partial_text = ""
 
-    async def _transcribe(self, pcm_audio: bytes) -> TranscriptionResult:
+    async def _transcribe(
+        self,
+        pcm_audio: bytes,
+        *,
+        draft: bool = False,
+    ) -> TranscriptionResult:
         expires_at = datetime.now(tz=UTC) + timedelta(seconds=self._privacy_ttl_seconds)
         reference = await self._snapshot_store.create(
             pcm_audio,
@@ -313,6 +318,7 @@ class LiveTranscriptionSession:
                     language=self._options.language,
                     vocabulary=self._options.vocabulary,
                     word_timestamps=self._options.word_timestamps,
+                    draft=draft,
                 )
             )
             processed = self._text_processor.process(result)

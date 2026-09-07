@@ -286,7 +286,7 @@ completion, cancellation, failure, or expiry cleanup.
 For a fully containerized CPU-only conversation stack, accept the gated model terms and
 set these deployment secrets/options in `.env`:
 
-```text
+```text.
 SPEECH_API_DIARIZATION_ENABLED=true
 SPEECH_API_DIARIZATION_HUGGINGFACE_TOKEN=<read-only deployment secret>
 SPEECH_API_ASR_MODEL_NAME=medium
@@ -333,8 +333,16 @@ capacity pressure, uncertain automatic language, and dependency failures use san
 `error` events. Streamed PCM remains only in bounded session memory; private WAV
 snapshots exist only during an inference call and are deleted in `finally` cleanup.
 
-CPU inference cannot guarantee interactive partial latency. For within-seconds dictation,
-use the `live-gpu` profile and keep the model warm.
+Partial events are replaceable drafts, so they decode greedily and skip the word-timestamp
+alignment pass that only a final result needs. Setting `SPEECH_API_ASR_DRAFT_MODEL_NAME` to a
+smaller model such as `tiny` serves partials from it while finals keep using
+`SPEECH_API_ASR_MODEL_NAME`, which lowers dictation latency without changing the accuracy of
+the text a caller keeps. Both models stay loaded in the API process, so budget memory for the
+pair.
+
+CPU inference cannot guarantee interactive partial latency. Whisper decodes buffered windows
+rather than streaming tokens, so partials arrive in chunks instead of word by word. For
+within-seconds dictation, use the `live-gpu` profile and keep the model warm.
 
 ### Test live dictation from your microphone
 

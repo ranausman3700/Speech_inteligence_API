@@ -26,12 +26,15 @@ services:
           cpus: "0.25"
           memory: 256M
 
+  # Live dictation runs inference inside this process rather than on a Celery
+  # worker, so the API needs real CPU and room to hold the ASR model. Keep it
+  # above the model's footprint: roughly 1.5G for `small`, 3G for `medium`.
   api:
     deploy:
       resources:
         limits:
-          cpus: "1.00"
-          memory: 1G
+          cpus: "2.50"
+          memory: 3G
 
   worker-short:
     deploy:

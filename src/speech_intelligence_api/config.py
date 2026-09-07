@@ -69,6 +69,9 @@ class Settings(BaseSettings):
         default_factory=lambda: Path(tempfile.gettempdir()) / "speech-intelligence-api"
     )
     asr_model_name: str = Field(default="large-v3", min_length=1, max_length=255)
+    #: Smaller model used only for live partial text, which a final result later
+    #: replaces. Leave unset to reuse the main model for partials too.
+    asr_draft_model_name: str | None = Field(default=None, min_length=1, max_length=255)
     asr_device: Literal["auto", "cpu", "cuda"] = "auto"
     asr_compute_type: str = Field(default="default", min_length=1, max_length=32)
     asr_cpu_threads: int = Field(default=0, ge=0)

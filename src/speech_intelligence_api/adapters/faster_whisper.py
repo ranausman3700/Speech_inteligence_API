@@ -62,7 +62,7 @@ class _WhisperModel(Protocol):
         """Match the subset of Faster-Whisper used by this adapter."""
 
 
-ModelFactory = Callable[[], _WhisperModel]
+ModelFactory = Callable[[str], _WhisperModel]
 
 
 class FasterWhisperSpeechRecognizer:
@@ -80,7 +80,7 @@ class FasterWhisperSpeechRecognizer:
         self._store = store
         self._model_factory = model_factory or self._build_model
         self._observability = observability or NoopObservability()
-        self._model: _WhisperModel | None = None
+        self._models: dict[str, _WhisperModel] = {}
         self._model_lock = asyncio.Lock()
         self._inference_slots = asyncio.Semaphore(settings.asr_max_concurrency)
         self._supported_codes = frozenset(code.value for code in LanguageCode)
@@ -88,7 +88,7 @@ class FasterWhisperSpeechRecognizer:
     async def transcribe(self, request: TranscriptionRequest) -> TranscriptionResult:
         """Run source-language transcription with word timestamps and hotwords."""
 
-        model = await self._get_model()
+        model = await self._get_model(self._model_name_for(request))
         with self._observability.span(
             "speech.inference.transcription",
             kind="internal",
@@ -127,22 +127,33 @@ class FasterWhisperSpeechRecognizer:
                         duration_seconds=time.perf_counter() - started_at,
                     )
 
-    async def _get_model(self) -> _WhisperModel:
-        if self._model is not None:
-            return self._model
+    def _model_name_for(self, request: TranscriptionRequest) -> str:
+        """Serve live partials from the smaller draft model when one is configured."""
+
+        if request.draft and self._settings.asr_draft_model_name is not None:
+            return self._settings.asr_draft_model_name
+        return self._settings.asr_model_name
+
+    async def _get_model(self, model_name: str) -> _WhisperModel:
+        cached = self._models.get(model_name)
+        if cached is not None:
+            return cached
         async with self._model_lock:
-            if self._model is None:
+            if model_name not in self._models:
                 try:
-                    self._model = await anyio.to_thread.run_sync(self._model_factory)
+                    self._models[model_name] = await anyio.to_thread.run_sync(
+                        self._model_factory,
+                        model_name,
+                    )
                 except Exception as exc:
                     logger.error(
                         "Speech-recognition model loading failed",
                         extra={"exception_class": type(exc).__name__},
                     )
                     raise ModelUnavailableError from None
-        return self._model
+        return self._models[model_name]
 
-    def _build_model(self) -> _WhisperModel:
+    def _build_model(self, model_name: str) -> _WhisperModel:
         from faster_whisper import WhisperModel  # type: ignore[import-untyped]
 
         download_root = (
@@ -151,7 +162,7 @@ class FasterWhisperSpeechRecognizer:
             else None
         )
         model = WhisperModel(
-            self._settings.asr_model_name,
+            model_name,
             device=self._settings.asr_device,
             compute_type=self._settings.asr_compute_type,
             cpu_threads=self._settings.asr_cpu_threads,
@@ -180,9 +191,9 @@ class FasterWhisperSpeechRecognizer:
             audio_path,
             language=selected_language.value,
             task="transcribe",
-            beam_size=self._settings.asr_beam_size,
-            condition_on_previous_text=True,
-            word_timestamps=request.word_timestamps,
+            beam_size=1 if request.draft else self._settings.asr_beam_size,
+            condition_on_previous_text=not request.draft,
+            word_timestamps=request.word_timestamps and not request.draft,
             hotwords=", ".join(request.vocabulary) if request.vocabulary else None,
             vad_filter=True,
         )

@@ -109,6 +109,10 @@ class TranscriptionRequest:
     vocabulary: tuple[str, ...] = ()
     word_timestamps: bool = True
 
+    #: Trade accuracy for latency. Live partials are replaced by later text, so
+    #: they decode greedily and skip work only a final result needs.
+    draft: bool = False
+
     def __post_init__(self) -> None:
         if len(self.vocabulary) > 100:
             raise ValueError("custom vocabulary cannot exceed 100 entries")

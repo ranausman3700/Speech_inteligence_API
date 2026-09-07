@@ -96,6 +96,7 @@ def _request(
     chinese_script: ChineseScript | None = None,
     vocabulary: tuple[str, ...] = (),
     word_timestamps: bool = True,
+    draft: bool = False,
 ) -> TranscriptionRequest:
     return TranscriptionRequest(
         audio=_audio_reference(),
@@ -106,6 +107,7 @@ def _request(
         ),
         vocabulary=vocabulary,
         word_timestamps=word_timestamps,
+        draft=draft,
     )
 
 
@@ -114,17 +116,26 @@ def _recognizer(
     model: FakeModel,
     *,
     threshold: float = 0.7,
+    draft_model_name: str | None = None,
+    loaded_names: list[str] | None = None,
 ) -> FasterWhisperSpeechRecognizer:
     settings = make_settings().model_copy(
         update={
             "temp_storage_root": tmp_path,
             "language_confidence_threshold": threshold,
+            "asr_draft_model_name": draft_model_name,
         }
     )
+
+    def factory(model_name: str) -> FakeModel:
+        if loaded_names is not None:
+            loaded_names.append(model_name)
+        return model
+
     return FasterWhisperSpeechRecognizer(
         settings,
         LocalEphemeralBlobStore(tmp_path),
-        model_factory=cast(ModelFactory, lambda: model),
+        model_factory=cast(ModelFactory, factory),
     )
 
 
@@ -169,6 +180,50 @@ async def test_explicit_language_transcribes_in_source_language(tmp_path: Path) 
     assert options["hotwords"] == "OpenAI, واجهة"
     assert options["word_timestamps"] is True
     assert options["vad_filter"] is True
+    assert options["beam_size"] == 5
+    assert options["condition_on_previous_text"] is True
+
+
+@pytest.mark.asyncio
+async def test_draft_requests_decode_greedily_for_live_partial_latency(tmp_path: Path) -> None:
+    model = FakeModel([([_speech_segment()], FakeInfo(language="en", language_probability=0.99))])
+    recognizer = _recognizer(tmp_path, model)
+
+    await recognizer.transcribe(
+        _request(
+            mode=LanguageSelectionMode.EXPLICIT,
+            language=LanguageCode.ENGLISH,
+            word_timestamps=True,
+            draft=True,
+        )
+    )
+
+    options = model.calls[0][1]
+    assert options["beam_size"] == 1
+    assert options["condition_on_previous_text"] is False
+    assert options["word_timestamps"] is False
+
+
+@pytest.mark.asyncio
+async def test_draft_requests_use_the_configured_draft_model(tmp_path: Path) -> None:
+    model = FakeModel(
+        [
+            ([_speech_segment()], FakeInfo(language="en", language_probability=0.99)),
+            ([_speech_segment()], FakeInfo(language="en", language_probability=0.99)),
+        ]
+    )
+    loaded_names: list[str] = []
+    recognizer = _recognizer(tmp_path, model, draft_model_name="tiny", loaded_names=loaded_names)
+
+    await recognizer.transcribe(
+        _request(mode=LanguageSelectionMode.EXPLICIT, language=LanguageCode.ENGLISH, draft=True)
+    )
+    await recognizer.transcribe(
+        _request(mode=LanguageSelectionMode.EXPLICIT, language=LanguageCode.ENGLISH)
+    )
+
+    # A final keeps the accurate main model; only the replaceable partial downgrades.
+    assert loaded_names == ["tiny", make_settings().asr_model_name]
 
 
 @pytest.mark.asyncio
@@ -308,7 +363,7 @@ async def test_inference_failure_is_sanitized_and_model_is_loaded_once(tmp_path:
     )
     factory_calls = 0
 
-    def factory() -> Any:
+    def factory(model_name: str) -> Any:
         nonlocal factory_calls
         factory_calls += 1
         return model
@@ -364,7 +419,7 @@ def test_default_model_factory_passes_production_settings(
         LocalEphemeralBlobStore(tmp_path),
     )
 
-    model = recognizer._build_model()
+    model = recognizer._build_model(settings.asr_model_name)
 
     assert model is expected_model
     assert captured == {
