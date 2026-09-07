@@ -1,0 +1,39 @@
+# syntax=docker/dockerfile:1.7
+
+FROM nvidia/cuda:12.9.2-cudnn-runtime-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HF_HOME=/models/huggingface \
+    HF_XET_CACHE=/models/huggingface/xet \
+    XDG_CACHE_HOME=/models/cache \
+    PATH=/opt/venv/bin:$PATH
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends python3 python3-venv libgomp1 ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 app \
+    && useradd --uid 10001 --gid app --create-home --shell /usr/sbin/nologin app \
+    && mkdir -p /app /models /var/lib/speech-intelligence \
+    && chown -R app:app /app /models /var/lib/speech-intelligence \
+    && python3 -m venv /opt/venv
+
+WORKDIR /app
+
+COPY pyproject.toml ./
+
+RUN python -c "import subprocess,sys,tomllib; data=tomllib.load(open('pyproject.toml','rb')); subprocess.check_call([sys.executable,'-m','pip','install',*data['build-system']['requires'],*data['project']['dependencies']])"
+
+COPY README.md ./
+COPY src ./src
+
+RUN python -m pip install --no-deps --no-build-isolation .
+
+USER app
+
+EXPOSE 8000
+
+CMD ["celery", "-A", "speech_intelligence_api.workers.celery_app:celery_app", "worker", "--queues", "transcription.short,transcription.long", "--concurrency", "1", "--loglevel", "INFO"]

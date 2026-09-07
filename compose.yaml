@@ -1,0 +1,476 @@
+name: speech-intelligence
+
+x-app-base: &app-base
+  build:
+    context: .
+    dockerfile: Dockerfile
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    SPEECH_API_ASYNC_JOBS_ENABLED: "true"
+    SPEECH_API_REDIS_JOB_URL: redis://redis-state:6379/0
+    SPEECH_API_CELERY_BROKER_URL: redis://redis-broker:6379/0
+    SPEECH_API_TEMP_STORAGE_ROOT: /var/lib/speech-intelligence
+    SPEECH_API_ASR_MODEL_NAME: ${SPEECH_API_ASR_MODEL_NAME:-medium}
+    SPEECH_API_ASR_DEVICE: ${SPEECH_API_ASR_DEVICE:-cpu}
+    SPEECH_API_ASR_COMPUTE_TYPE: ${SPEECH_API_ASR_COMPUTE_TYPE:-int8}
+    SPEECH_API_ASR_MODEL_DOWNLOAD_ROOT: /models
+    SPEECH_API_DIARIZATION_ENABLED: ${SPEECH_API_DIARIZATION_ENABLED:-false}
+  depends_on:
+    redis-state:
+      condition: service_healthy
+    redis-broker:
+      condition: service_healthy
+  restart: unless-stopped
+  init: true
+  read_only: true
+  cap_drop:
+    - ALL
+  pids_limit: 512
+  tmpfs:
+    - /tmp:size=128m,mode=1777
+  security_opt:
+    - no-new-privileges:true
+  volumes:
+    - audio-data:/var/lib/speech-intelligence
+    - model-cache:/models
+
+services:
+  redis-state:
+    image: redis:8.8.1-alpine3.23
+    user: "999:1000"
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - 1gb
+      - --maxmemory-policy
+      - noeviction
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+      - /data:size=1024m,mode=0700,uid=999,gid=1000
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis-broker:
+    image: redis:8.8.1-alpine3.23
+    user: "999:1000"
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --maxmemory
+      - 512mb
+      - --maxmemory-policy
+      - noeviction
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - redis-broker-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    <<: *app-base
+    command:
+      - uvicorn
+      - speech_intelligence_api.entrypoints.http.app:create_app
+      - --factory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --limit-concurrency
+      - ${SPEECH_API_HTTP_MAX_CONCURRENCY:-1200}
+      - --backlog
+      - ${SPEECH_API_HTTP_BACKLOG:-2048}
+      - --timeout-graceful-shutdown
+      - ${SPEECH_API_HTTP_GRACEFUL_SHUTDOWN_SECONDS:-30}
+      - --ws-max-size
+      - ${SPEECH_API_LIVE_MAX_CHUNK_BYTES:-32000}
+      - --ws-max-queue
+      - ${SPEECH_API_LIVE_INPUT_QUEUE_CHUNKS:-128}
+      - --ws-ping-interval
+      - "20"
+      - --ws-ping-timeout
+      - "20"
+      - --proxy-headers
+      - --forwarded-allow-ips=${SPEECH_API_FORWARDED_ALLOW_IPS:-127.0.0.1}
+    ports:
+      - "${SPEECH_API_BIND_ADDRESS:-127.0.0.1}:${SPEECH_API_HTTP_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 10
+
+  api-gpu:
+    profiles: ["live-gpu"]
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      SPEECH_API_ASYNC_JOBS_ENABLED: "true"
+      SPEECH_API_REDIS_JOB_URL: redis://redis-state:6379/0
+      SPEECH_API_CELERY_BROKER_URL: redis://redis-broker:6379/0
+      SPEECH_API_TEMP_STORAGE_ROOT: /var/lib/speech-intelligence
+      SPEECH_API_ASR_MODEL_NAME: large-v3
+      SPEECH_API_ASR_MODEL_DOWNLOAD_ROOT: /models
+      SPEECH_API_ASR_DEVICE: cuda
+      SPEECH_API_ASR_COMPUTE_TYPE: float16
+      SPEECH_API_ASR_MAX_CONCURRENCY: "1"
+    depends_on:
+      redis-state:
+        condition: service_healthy
+      redis-broker:
+        condition: service_healthy
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    pids_limit: 512
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - audio-data:/var/lib/speech-intelligence
+      - model-cache:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command:
+      - uvicorn
+      - speech_intelligence_api.entrypoints.http.app:create_app
+      - --factory
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --limit-concurrency
+      - ${SPEECH_API_HTTP_MAX_CONCURRENCY:-1200}
+      - --backlog
+      - ${SPEECH_API_HTTP_BACKLOG:-2048}
+      - --timeout-graceful-shutdown
+      - ${SPEECH_API_HTTP_GRACEFUL_SHUTDOWN_SECONDS:-30}
+      - --ws-max-size
+      - ${SPEECH_API_LIVE_MAX_CHUNK_BYTES:-32000}
+      - --ws-max-queue
+      - ${SPEECH_API_LIVE_INPUT_QUEUE_CHUNKS:-128}
+      - --ws-ping-interval
+      - "20"
+      - --ws-ping-timeout
+      - "20"
+      - --proxy-headers
+      - --forwarded-allow-ips=${SPEECH_API_FORWARDED_ALLOW_IPS:-127.0.0.1}
+    ports:
+      - "${SPEECH_API_BIND_ADDRESS:-127.0.0.1}:${SPEECH_API_HTTP_PORT:-8000}:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=3)"
+      interval: 15s
+      timeout: 5s
+      start_period: 60s
+      retries: 10
+
+  worker-short:
+    <<: *app-base
+    healthcheck:
+      disable: true
+    command:
+      - celery
+      - -A
+      - speech_intelligence_api.workers.celery_app:celery_app
+      - worker
+      - --queues
+      - transcription.short
+      - --concurrency
+      - "1"
+      - --loglevel
+      - INFO
+      - --hostname
+      - short@%h
+    stop_grace_period: 30s
+
+  worker-long:
+    <<: *app-base
+    healthcheck:
+      disable: true
+    command:
+      - celery
+      - -A
+      - speech_intelligence_api.workers.celery_app:celery_app
+      - worker
+      - --queues
+      - transcription.long
+      - --concurrency
+      - "1"
+      - --loglevel
+      - INFO
+      - --hostname
+      - long@%h
+    stop_grace_period: 30s
+
+  worker-cleanup:
+    <<: *app-base
+    healthcheck:
+      disable: true
+    command:
+      - celery
+      - -A
+      - speech_intelligence_api.workers.celery_app:celery_app
+      - worker
+      - --queues
+      - cleanup
+      - --concurrency
+      - "1"
+      - --loglevel
+      - INFO
+      - --hostname
+      - cleanup@%h
+
+  worker-diarization-cpu:
+    profiles: ["diarization-cpu"]
+    build:
+      context: .
+      dockerfile: Dockerfile.diarization.cpu
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      SPEECH_API_ASYNC_JOBS_ENABLED: "true"
+      SPEECH_API_DIARIZATION_ENABLED: "true"
+      SPEECH_API_REDIS_JOB_URL: redis://redis-state:6379/0
+      SPEECH_API_CELERY_BROKER_URL: redis://redis-broker:6379/0
+      SPEECH_API_TEMP_STORAGE_ROOT: /var/lib/speech-intelligence
+      SPEECH_API_ASR_MODEL_NAME: ${SPEECH_API_ASR_MODEL_NAME:-medium}
+      SPEECH_API_ASR_MODEL_DOWNLOAD_ROOT: /models
+      SPEECH_API_ASR_DEVICE: cpu
+      SPEECH_API_ASR_COMPUTE_TYPE: int8
+      SPEECH_API_ASR_MAX_CONCURRENCY: "1"
+      SPEECH_API_DIARIZATION_MODEL_SOURCE: pyannote/speaker-diarization-community-1
+      SPEECH_API_DIARIZATION_DEVICE: cpu
+      MPLCONFIGDIR: /tmp/matplotlib
+      PYANNOTE_METRICS_ENABLED: "0"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+    depends_on:
+      redis-state:
+        condition: service_healthy
+      redis-broker:
+        condition: service_healthy
+    restart: unless-stopped
+    init: true
+    healthcheck:
+      disable: true
+    read_only: true
+    cap_drop:
+      - ALL
+    pids_limit: 512
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - audio-data:/var/lib/speech-intelligence
+      - model-cache:/models
+    command:
+      - celery
+      - -A
+      - speech_intelligence_api.workers.celery_app:celery_app
+      - worker
+      - --queues
+      - diarization
+      - --concurrency
+      - "1"
+      - --loglevel
+      - INFO
+      - --hostname
+      - diarization-cpu@%h
+    stop_grace_period: 30s
+
+  beat:
+    <<: *app-base
+    healthcheck:
+      disable: true
+    command:
+      - celery
+      - -A
+      - speech_intelligence_api.workers.celery_app:celery_app
+      - beat
+      - --loglevel
+      - INFO
+      - --schedule
+      - /tmp/celerybeat-schedule
+
+  worker-gpu:
+    profiles: ["gpu"]
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      SPEECH_API_ASYNC_JOBS_ENABLED: "true"
+      SPEECH_API_REDIS_JOB_URL: redis://redis-state:6379/0
+      SPEECH_API_CELERY_BROKER_URL: redis://redis-broker:6379/0
+      SPEECH_API_TEMP_STORAGE_ROOT: /var/lib/speech-intelligence
+      SPEECH_API_ASR_MODEL_NAME: large-v3
+      SPEECH_API_ASR_MODEL_DOWNLOAD_ROOT: /models
+      SPEECH_API_ASR_DEVICE: cuda
+      SPEECH_API_ASR_COMPUTE_TYPE: float16
+      SPEECH_API_ASR_MAX_CONCURRENCY: "1"
+    depends_on:
+      redis-state:
+        condition: service_healthy
+      redis-broker:
+        condition: service_healthy
+    restart: unless-stopped
+    init: true
+    healthcheck:
+      disable: true
+    read_only: true
+    cap_drop:
+      - ALL
+    pids_limit: 512
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - audio-data:/var/lib/speech-intelligence
+      - model-cache:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command:
+      - celery
+      - -A
+      - speech_intelligence_api.workers.celery_app:celery_app
+      - worker
+      - --queues
+      - transcription.short,transcription.long
+      - --concurrency
+      - "1"
+      - --loglevel
+      - INFO
+      - --hostname
+      - gpu@%h
+
+  worker-diarization:
+    profiles: ["diarization-gpu"]
+    build:
+      context: .
+      dockerfile: Dockerfile.diarization
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      SPEECH_API_ASYNC_JOBS_ENABLED: "true"
+      SPEECH_API_DIARIZATION_ENABLED: "true"
+      SPEECH_API_REDIS_JOB_URL: redis://redis-state:6379/0
+      SPEECH_API_CELERY_BROKER_URL: redis://redis-broker:6379/0
+      SPEECH_API_TEMP_STORAGE_ROOT: /var/lib/speech-intelligence
+      SPEECH_API_ASR_MODEL_NAME: large-v3
+      SPEECH_API_ASR_MODEL_DOWNLOAD_ROOT: /models
+      SPEECH_API_ASR_DEVICE: cuda
+      SPEECH_API_ASR_COMPUTE_TYPE: float16
+      SPEECH_API_ASR_MAX_CONCURRENCY: "1"
+      SPEECH_API_DIARIZATION_MODEL_SOURCE: pyannote/speaker-diarization-community-1
+      SPEECH_API_DIARIZATION_DEVICE: cuda
+      PYANNOTE_METRICS_ENABLED: "0"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+    depends_on:
+      redis-state:
+        condition: service_healthy
+      redis-broker:
+        condition: service_healthy
+    restart: unless-stopped
+    init: true
+    healthcheck:
+      disable: true
+    read_only: true
+    cap_drop:
+      - ALL
+    pids_limit: 512
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - audio-data:/var/lib/speech-intelligence
+      - model-cache:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command:
+      - celery
+      - -A
+      - speech_intelligence_api.workers.celery_app:celery_app
+      - worker
+      - --queues
+      - diarization
+      - --concurrency
+      - "1"
+      - --loglevel
+      - INFO
+      - --hostname
+      - diarization@%h
+    stop_grace_period: 30s
+
+volumes:
+  audio-data:
+  model-cache:
+  redis-broker-data:

@@ -1,0 +1,110 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "speech-intelligence-api"
+version = "0.1.0"
+description = "Production-oriented multilingual speech intelligence backend"
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+license = "MIT"
+authors = [{ name = "Speech Intelligence API contributors" }]
+dependencies = [
+    "anyio==4.14.2",
+    "av==18.0.0",
+    "celery==5.6.3",
+    "fastapi==0.139.2",
+    "faster-whisper==1.2.1",
+    "numpy==2.4.6",
+    "opencc==1.4.1",
+    "opentelemetry-api==1.44.0",
+    "opentelemetry-exporter-otlp-proto-http==1.44.0",
+    "opentelemetry-sdk==1.44.0",
+    "prometheus-client==0.25.0",
+    "pydantic==2.13.4",
+    "pydantic-settings==2.14.2",
+    "python-multipart==0.0.32",
+    "redis[hiredis]==8.0.1",
+    "uvicorn[standard]==0.51.0",
+    "websockets==17.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "fakeredis==2.36.2",
+    "httpx2==2.9.1",
+    "mypy==2.3.0",
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "pytest-cov==7.1.0",
+    "ruff==0.15.22",
+]
+microphone = ["sounddevice==0.5.5"]
+diarization = ["pyannote.audio==4.0.7"]
+load = ["httpx==0.28.1"]
+
+[project.scripts]
+speech-mic-test = "speech_intelligence_api.entrypoints.microphone_client:main"
+speech-load-test = "speech_intelligence_api.entrypoints.load_test_client:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = [
+    "--strict-config",
+    "--strict-markers",
+    "--cov=speech_intelligence_api",
+    "--cov-branch",
+    "--cov-report=term-missing",
+    "--cov-fail-under=90",
+]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["speech_intelligence_api"]
+omit = ["*/ports/*"]
+
+[tool.coverage.report]
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "\\.\\.\\.",
+]
+show_missing = true
+skip_covered = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["ASYNC", "B", "E", "F", "I", "RUF", "S", "SIM", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101", "S105", "S106"]
+
+[tool.mypy]
+python_version = "3.11"
+plugins = ["pydantic.mypy"]
+strict = true
+warn_unreachable = true
+pretty = true
+show_error_codes = true
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_decorators = false
+
+[[tool.mypy.overrides]]
+module = ["celery", "celery.*", "kombu", "kombu.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["pyannote", "pyannote.*", "torch", "torch.*"]
+ignore_missing_imports = true

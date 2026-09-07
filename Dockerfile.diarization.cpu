@@ -1,0 +1,48 @@
+# syntax=docker/dockerfile:1.7
+
+FROM python:3.11.15-slim-bookworm
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HF_HOME=/models/huggingface \
+    HF_XET_CACHE=/models/huggingface/xet \
+    HF_HUB_DISABLE_TELEMETRY=1 \
+    PYANNOTE_METRICS_ENABLED=0 \
+    XDG_CACHE_HOME=/models/cache
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends \
+        ca-certificates ffmpeg libgomp1 libsndfile1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 app \
+    && useradd --uid 10001 --gid app --create-home --shell /usr/sbin/nologin app \
+    && mkdir -p /models /var/lib/speech-intelligence \
+    && chown -R app:app /models /var/lib/speech-intelligence
+
+WORKDIR /app
+
+COPY pyproject.toml ./
+
+RUN python -m pip install \
+        --index-url https://download.pytorch.org/whl/cpu \
+        torch==2.11.0+cpu \
+        torchaudio==2.11.0+cpu \
+    && python -c "import subprocess,sys,tomllib; data=tomllib.load(open('pyproject.toml','rb')); subprocess.check_call([sys.executable,'-m','pip','install',*data['build-system']['requires'],*data['project']['dependencies'],*data['project']['optional-dependencies']['diarization']])"
+
+RUN python -m pip install \
+        --index-url https://download.pytorch.org/whl/cpu \
+        --force-reinstall \
+        --no-deps \
+        torchcodec==0.11.1+cpu
+
+COPY README.md ./
+COPY src ./src
+
+RUN python -m pip install --no-deps --no-build-isolation .
+
+USER app
+
+CMD ["celery", "-A", "speech_intelligence_api.workers.celery_app:celery_app", "worker", "--queues", "diarization", "--concurrency", "1", "--loglevel", "INFO"]
