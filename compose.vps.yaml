@@ -1,0 +1,69 @@
+# Optional resource-limit overlay for a shared VPS that also runs other live
+# services. Apply it alongside the base file so no single container can
+# monopolize CPU/RAM during a diarization burst:
+#
+#   docker compose -f compose.yaml -f compose.vps.yaml --profile diarization-cpu \
+#     up --build -d redis-state redis-broker api worker-short worker-long \
+#     worker-diarization-cpu worker-cleanup worker-diarization-cpu beat
+#
+# Limits are ceilings, not reservations: idle containers use little, and a
+# container is only throttled once it tries to exceed its own cap. Adjust the
+# values below to match what `nproc` / `free -h` report as actually free on
+# the host, then watch `docker stats` after the first real conversation job.
+
+services:
+  redis-state:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+
+  redis-broker:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+
+  api:
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 1G
+
+  worker-short:
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 2G
+
+  worker-long:
+    deploy:
+      resources:
+        limits:
+          cpus: "1.00"
+          memory: 2G
+
+  worker-diarization-cpu:
+    deploy:
+      resources:
+        limits:
+          cpus: "2.00"
+          memory: 3G
+
+  worker-cleanup:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
+
+  beat:
+    deploy:
+      resources:
+        limits:
+          cpus: "0.10"
+          memory: 128M
