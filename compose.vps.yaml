@@ -18,6 +18,7 @@ services:
         limits:
           cpus: "0.50"
           memory: 512M
+          pids: 128
 
   redis-broker:
     deploy:
@@ -25,6 +26,7 @@ services:
         limits:
           cpus: "0.25"
           memory: 256M
+          pids: 128
 
   # Live dictation runs inference inside this process rather than on a Celery
   # worker, so the API needs real CPU and room to hold the ASR model. Keep it
@@ -35,20 +37,26 @@ services:
         limits:
           cpus: "2.50"
           memory: 3G
+          pids: 512
 
+  # Keep every ASR container at or above SPEECH_API_ASR_CPU_THREADS. A model given
+  # more threads than its cgroup quota thrashes: measured on this project, four
+  # threads decoded in 18s while eight on the same cores took 36s.
   worker-short:
     deploy:
       resources:
         limits:
-          cpus: "1.00"
+          cpus: "2.00"
           memory: 2G
+          pids: 512
 
   worker-long:
     deploy:
       resources:
         limits:
-          cpus: "1.00"
+          cpus: "2.00"
           memory: 2G
+          pids: 512
 
   worker-diarization-cpu:
     deploy:
@@ -56,6 +64,7 @@ services:
         limits:
           cpus: "2.00"
           memory: 3G
+          pids: 512
 
   worker-cleanup:
     deploy:
@@ -63,6 +72,7 @@ services:
         limits:
           cpus: "0.25"
           memory: 256M
+          pids: 512
 
   beat:
     deploy:
@@ -70,3 +80,4 @@ services:
         limits:
           cpus: "0.10"
           memory: 128M
+          pids: 512
