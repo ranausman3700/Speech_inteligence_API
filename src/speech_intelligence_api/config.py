@@ -83,6 +83,9 @@ class Settings(BaseSettings):
     default_chinese_script: ChineseScript = ChineseScript.SIMPLIFIED
     asr_model_download_root: Path | None = None
     asr_model_local_files_only: bool = False
+    #: Directory holding the Noto fonts PDF export embeds. Plain-text export needs
+    #: no font, so leaving this unset only disables PDF.
+    export_font_root: Path | None = None
     async_jobs_enabled: bool = False
     redis_job_url: SecretStr = Field(
         default=SecretStr("redis://127.0.0.1:6379/1"),

@@ -3,7 +3,12 @@
 from fastapi import APIRouter, Request, status
 
 from speech_intelligence_api.domain.enums import SUPPORTED_LANGUAGE_VARIANTS
-from speech_intelligence_api.entrypoints.http.routes import conversations, jobs, transcriptions
+from speech_intelligence_api.entrypoints.http.routes import (
+    conversations,
+    exports,
+    jobs,
+    transcriptions,
+)
 from speech_intelligence_api.entrypoints.http.schemas import (
     CapabilitiesResponse,
     ConversationCapability,
@@ -16,6 +21,7 @@ router = APIRouter()
 router.include_router(transcriptions.router)
 router.include_router(conversations.router)
 router.include_router(jobs.router)
+router.include_router(exports.router)
 
 
 @router.get(

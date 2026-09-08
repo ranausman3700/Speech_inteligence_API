@@ -65,6 +65,20 @@ class LiveEventType(StrEnum):
     FINAL = "final"
 
 
+class ExportContent(StrEnum):
+    """What a caller wants written into an exported document."""
+
+    TRANSCRIPT = "transcript"
+    SUMMARY = "summary"
+
+
+class ExportFormat(StrEnum):
+    """Supported export document formats."""
+
+    TXT = "txt"
+    PDF = "pdf"
+
+
 class JobKind(StrEnum):
     """Asynchronous workload categories."""
 

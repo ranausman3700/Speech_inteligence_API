@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import importlib.util
+import logging
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 
@@ -11,13 +13,16 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from speech_intelligence_api import __version__
 from speech_intelligence_api.adapters.observability import build_observability
+from speech_intelligence_api.adapters.text_documents import PlainTextDocumentRenderer
 from speech_intelligence_api.application.conversations import ConversationSubmissionService
+from speech_intelligence_api.application.exports import TranscriptExportService
 from speech_intelligence_api.application.jobs import JobManagementService
 from speech_intelligence_api.application.live_transcription import LiveTranscriptionService
 from speech_intelligence_api.application.readiness import ReadinessCheck, ReadinessService
 from speech_intelligence_api.application.transcriptions import BatchTranscriptionService
 from speech_intelligence_api.bootstrap import ApiRuntime, build_api_runtime
 from speech_intelligence_api.config import Settings, get_settings
+from speech_intelligence_api.domain.enums import ExportFormat
 from speech_intelligence_api.entrypoints.http.dependencies import authenticate_api_key
 from speech_intelligence_api.entrypoints.http.errors import install_exception_handlers
 from speech_intelligence_api.entrypoints.http.middleware import (
@@ -30,8 +35,11 @@ from speech_intelligence_api.entrypoints.http.routes import health, live, metric
 from speech_intelligence_api.entrypoints.http.schemas import ProblemDetail
 from speech_intelligence_api.entrypoints.http.security import ApiKeyAuthenticator
 from speech_intelligence_api.logging import configure_logging
+from speech_intelligence_api.ports.documents import DocumentRenderer
 from speech_intelligence_api.ports.observability import Observability
 from speech_intelligence_api.ports.rate_limiting import RateLimiter
+
+logger = logging.getLogger(__name__)
 
 
 def create_app(
@@ -101,6 +109,7 @@ def create_app(
     app.state.authenticator = ApiKeyAuthenticator(resolved_settings)
     app.state.readiness_service = ReadinessService(tuple(readiness_checks))
     app.state.transcription_service = transcription_service
+    app.state.export_service = _export_service(resolved_settings)
     app.state.conversation_service = conversation_service
     app.state.live_transcription_service = live_transcription_service
     app.state.job_service = job_service
@@ -180,3 +189,25 @@ def create_app(
     if resolved_settings.service_version != __version__:
         raise ValueError("configured service version must match the package version")
     return app
+
+
+def _export_service(settings: Settings) -> TranscriptExportService:
+    """Plain text always renders; PDF joins it only when fpdf2 is installed.
+
+    The renderer imports fpdf lazily so it stays testable without the optional
+    package, which means availability has to be probed here instead. Registering
+    it blindly would report a missing font when the real problem is a missing
+    dependency.
+    """
+
+    renderers: dict[ExportFormat, DocumentRenderer] = {
+        ExportFormat.TXT: PlainTextDocumentRenderer(),
+    }
+    if importlib.util.find_spec("fpdf") is None:
+        logger.warning("PDF export is unavailable because fpdf2 is not installed")
+        return TranscriptExportService(renderers)
+
+    from speech_intelligence_api.adapters.pdf_documents import PdfDocumentRenderer
+
+    renderers[ExportFormat.PDF] = PdfDocumentRenderer(settings)
+    return TranscriptExportService(renderers)

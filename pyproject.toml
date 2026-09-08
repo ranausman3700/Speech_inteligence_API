@@ -42,6 +42,8 @@ dev = [
 ]
 microphone = ["sounddevice==0.5.5"]
 diarization = ["pyannote.audio==4.0.7"]
+# PDF export; plain-text export needs no extra packages.
+export = ["fpdf2==2.8.8", "uharfbuzz==0.56.1"]
 load = ["httpx==0.28.1"]
 
 [project.scripts]
@@ -107,4 +109,8 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["pyannote", "pyannote.*", "torch", "torch.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["fpdf", "fpdf.*"]
 ignore_missing_imports = true

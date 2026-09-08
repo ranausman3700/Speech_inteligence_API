@@ -15,11 +15,32 @@ RUN groupadd --gid 10001 app \
     && mkdir -p /models /var/lib/speech-intelligence \
     && chown -R app:app /models /var/lib/speech-intelligence
 
+# Fonts PDF export embeds. The CJK face is deliberately excluded: it alone is
+# roughly twenty times this whole set, so install it only where callers need it.
+ADD --chown=app:app \
+    https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSans/hinted/ttf/NotoSans-Regular.ttf \
+    /fonts/NotoSans-Regular.ttf
+ADD --chown=app:app \
+    https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSansArabic/hinted/ttf/NotoSansArabic-Regular.ttf \
+    /fonts/NotoSansArabic-Regular.ttf
+ADD --chown=app:app \
+    https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSansHebrew/hinted/ttf/NotoSansHebrew-Regular.ttf \
+    /fonts/NotoSansHebrew-Regular.ttf
+ADD --chown=app:app \
+    https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSansDevanagari/hinted/ttf/NotoSansDevanagari-Regular.ttf \
+    /fonts/NotoSansDevanagari-Regular.ttf
+ADD --chown=app:app \
+    https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSansBengali/hinted/ttf/NotoSansBengali-Regular.ttf \
+    /fonts/NotoSansBengali-Regular.ttf
+ADD --chown=app:app \
+    https://github.com/notofonts/notofonts.github.io/raw/main/fonts/NotoSansThai/hinted/ttf/NotoSansThai-Regular.ttf \
+    /fonts/NotoSansThai-Regular.ttf
+
 WORKDIR /app
 
 COPY pyproject.toml ./
 
-RUN python -c "import subprocess,sys,tomllib; data=tomllib.load(open('pyproject.toml','rb')); subprocess.check_call([sys.executable,'-m','pip','install',*data['build-system']['requires'],*data['project']['dependencies']])"
+RUN python -c "import subprocess,sys,tomllib; data=tomllib.load(open('pyproject.toml','rb')); subprocess.check_call([sys.executable,'-m','pip','install',*data['build-system']['requires'],*data['project']['dependencies'],*data['project']['optional-dependencies']['export']])"
 
 COPY README.md ./
 COPY src ./src

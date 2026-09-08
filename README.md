@@ -244,6 +244,69 @@ Running `api-gpu` and `worker-gpu` together loads one model in each process and 
 requires enough VRAM for both. With a single 8 GB GPU, dedicate it to live dictation and
 keep the batch workers on CPU.
 
+## Transcript and summary export
+
+`POST /v1/exports` turns a transcript the caller already holds into a downloadable
+document, so one endpoint serves synchronous transcriptions, asynchronous job results and
+live dictation alike:
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:8000/v1/exports" `
+  -H "X-API-Key: replace-with-your-api-key" `
+  -H "Content-Type: application/json" `
+  -d '{\"transcript\":\"...\",\"content\":\"summary\",\"format\":\"pdf\"}' `
+  --output summary.pdf
+```
+
+`content` selects `transcript` (every sentence) or `summary` (the sentences carrying the
+transcript's most distinctive vocabulary, as bullets). `format` selects `txt` or `pdf`, and
+an optional `title` becomes both the document heading and the download name. The response
+is the file itself with `Content-Disposition: attachment` and `Cache-Control: no-store`.
+
+Summaries are extractive, so export costs no inference and no network call: sentences are
+ranked by term frequency after discarding the most common quarter of the vocabulary, which
+approximates stopword removal without a per-language word list, and scripts that do not
+separate words with spaces are scored on character bigrams. A transcript under four
+sentences returns its sentences unchanged, because such a transcript is already its own
+summary. Measured on this project, a plain-text export takes under 10 ms and a PDF about
+30-150 ms.
+
+Nothing is stored to serve a download, so exports are unaffected by the privacy TTL, and a
+caller can export a result it already fetched even after the job expired.
+
+### PDF export fonts
+
+Plain-text export always works. PDF must embed a font that contains the glyphs it draws,
+and Arabic, Devanagari, Bengali and Thai additionally need shaping so letters join and
+stack correctly.
+
+The Docker image already installs `.[export]` and downloads the fonts below into `/fonts`,
+which Compose passes as `SPEECH_API_EXPORT_FONT_ROOT`, so PDF works out of the box for
+every supported language except Chinese, Japanese and Korean:
+
+```text
+NotoSans-Regular.ttf            Latin, Cyrillic, Greek
+NotoSansArabic-Regular.ttf      Arabic
+NotoSansHebrew-Regular.ttf      Hebrew
+NotoSansDevanagari-Regular.ttf  Hindi
+NotoSansBengali-Regular.ttf     Bengali
+NotoSansThai-Regular.ttf        Thai
+NotoSansCJK-Regular.ttf         Chinese, Japanese, Korean (not bundled)
+```
+
+The CJK face is excluded on purpose: it alone is roughly twenty times the size of that
+whole set. Add it to the image, or mount it into the font directory, only where callers
+need those languages.
+
+Outside Docker, install the renderer with `pip install -e ".[export]"` and point
+`SPEECH_API_EXPORT_FONT_ROOT` at a directory holding the same filenames, downloaded from
+the [Noto releases](https://github.com/notofonts/notofonts.github.io).
+
+When the text needs a font that is not installed, the request fails with a sanitized `422`
+naming the missing file and pointing at `txt`, rather than returning a document with
+missing glyphs. The same happens when the renderer itself is unavailable, so a deployment
+without `.[export]` still serves plain text.
+
 ## Recorded multi-speaker conversations
 
 `POST /v1/conversations` always returns HTTP `202`; ASR and speaker diarization run on a
