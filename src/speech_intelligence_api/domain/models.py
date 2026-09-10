@@ -282,8 +282,13 @@ class ConversationResult:
     raw_transcript: str
     formatted_transcript: str
     segments: tuple[TranscriptSegment, ...]
+    #: Distinct people diarization attributed speech to. Segments it could not
+    #: attribute confidently stay labelled unknown and are excluded here.
+    speaker_count: int = 0
 
     def __post_init__(self) -> None:
+        if self.speaker_count < 0:
+            raise ValueError("speaker count cannot be negative")
         if not 0 <= self.language_confidence_estimate <= 1:
             raise ValueError("language confidence estimate must be between 0 and 1")
         if self.language is LanguageCode.CHINESE and self.chinese_script is None:

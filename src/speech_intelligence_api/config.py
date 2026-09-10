@@ -79,6 +79,11 @@ class Settings(BaseSettings):
     asr_max_concurrency: int = Field(default=1, ge=1, le=32)
     asr_beam_size: int = Field(default=5, ge=1, le=20)
     asr_language_detection_segments: int = Field(default=3, ge=1, le=10)
+    #: Optional decoder priming text. Whisper decodes one language at a time, so
+    #: English words spoken inside another language are only ever kept in Latin
+    #: script as a decoding preference; this biases that preference without a
+    #: code change. Leave unset to prime nothing.
+    asr_initial_prompt: str | None = Field(default=None, min_length=1, max_length=800)
     language_confidence_threshold: float = Field(default=0.70, ge=0.0, le=1.0)
     default_chinese_script: ChineseScript = ChineseScript.SIMPLIFIED
     asr_model_download_root: Path | None = None
@@ -152,6 +157,16 @@ class Settings(BaseSettings):
     live_pre_roll_ms: int = Field(default=320, ge=0, le=2000)
     live_partial_min_audio_seconds: float = Field(default=1, ge=0.25, le=10)
     live_partial_interval_seconds: float = Field(default=2, ge=0.5, le=10)
+
+    #: Optional integration with the CodesBunny API Control Center dashboard.
+    #: When enabled, tokens issued (and instantly revocable) from that dashboard
+    #: are accepted alongside the static `api_key_digests` list above, and every
+    #: request is reported back to it for the boss's monitoring dashboard. A
+    #: Control Center outage never blocks this API — see `ControlCenterClient`.
+    control_center_enabled: bool = False
+    control_center_base_url: str = "https://control.codesbunny.com"
+    control_center_service_key: SecretStr | None = Field(default=None, repr=False)
+    control_center_timeout_seconds: float = Field(default=2.0, ge=0.1, le=10.0)
 
     @field_validator("api_key_digests")
     @classmethod
@@ -271,6 +286,10 @@ class Settings(BaseSettings):
         if not self.api_key_digests:
             raise ValueError(
                 "at least one API-key digest is required when authentication is enabled"
+            )
+        if self.control_center_enabled and self.control_center_service_key is None:
+            raise ValueError(
+                "a Control Center service key is required when the integration is enabled"
             )
         return self
 

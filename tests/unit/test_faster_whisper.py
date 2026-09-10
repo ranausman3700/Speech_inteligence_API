@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import math
+import wave
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
+import numpy as np
 import pytest
 
 from speech_intelligence_api.adapters.faster_whisper import (
@@ -58,13 +60,19 @@ class FakeInfo:
     all_language_probs: list[tuple[str, float]] | None = None
 
 
+Detection = tuple[str, float, list[tuple[str, float]]]
+
+
 class FakeModel:
     def __init__(
         self,
         outcomes: list[tuple[Iterable[FakeSegment], FakeInfo] | Exception],
+        detections: list[Detection] | None = None,
     ) -> None:
         self.outcomes = outcomes
+        self.detections = detections or []
         self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.detect_calls: list[dict[str, Any]] = []
 
     def transcribe(
         self,
@@ -76,6 +84,10 @@ class FakeModel:
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
+
+    def detect_language(self, **kwargs: Any) -> Detection:
+        self.detect_calls.append(kwargs)
+        return self.detections.pop(0)
 
 
 def _audio_reference() -> BlobReference:
@@ -136,6 +148,9 @@ def _recognizer(
         settings,
         LocalEphemeralBlobStore(tmp_path),
         model_factory=cast(ModelFactory, factory),
+        # FakeModel scores whatever it is handed, so the loader stays a stub
+        # rather than pulling faster-whisper's decoder into unit tests.
+        audio_loader=lambda audio_path: audio_path,
     )
 
 
@@ -229,17 +244,8 @@ async def test_draft_requests_use_the_configured_draft_model(tmp_path: Path) -> 
 @pytest.mark.asyncio
 async def test_automatic_language_filters_to_supported_allowlist(tmp_path: Path) -> None:
     model = FakeModel(
-        [
-            (
-                [],
-                FakeInfo(
-                    language="xx",
-                    language_probability=0.99,
-                    all_language_probs=[("xx", 0.99), ("fr", 0.82), ("de", 0.11)],
-                ),
-            ),
-            ([_speech_segment(" bonjour ")], FakeInfo("fr", 0.82)),
-        ]
+        [([_speech_segment(" bonjour ")], FakeInfo("fr", 0.82))],
+        detections=[("xx", 0.99, [("xx", 0.99), ("fr", 0.82), ("de", 0.11)])],
     )
     recognizer = _recognizer(tmp_path, model)
 
@@ -247,29 +253,19 @@ async def test_automatic_language_filters_to_supported_allowlist(tmp_path: Path)
 
     assert result.language is LanguageCode.FRENCH
     assert result.language_confidence_estimate == pytest.approx(0.82)
-    assert len(model.calls) == 2
-    detection_options = model.calls[0][1]
-    assert detection_options["language"] is None
+    # Detection reads the encoder only, so automatic mode costs one decode, not two.
+    assert len(model.calls) == 1
+    detection_options = model.detect_calls[0]
+    assert detection_options["vad_filter"] is True
     assert detection_options["language_detection_threshold"] == 1.0
     assert detection_options["language_detection_segments"] == 3
-    assert model.calls[1][1]["language"] == "fr"
-    assert model.calls[1][1]["task"] == "transcribe"
+    assert model.calls[0][1]["language"] == "fr"
+    assert model.calls[0][1]["task"] == "transcribe"
 
 
 @pytest.mark.asyncio
 async def test_automatic_language_rejects_low_confidence(tmp_path: Path) -> None:
-    model = FakeModel(
-        [
-            (
-                [],
-                FakeInfo(
-                    language="en",
-                    language_probability=0.5,
-                    all_language_probs=[("en", 0.5), ("fr", 0.4)],
-                ),
-            )
-        ]
-    )
+    model = FakeModel([], detections=[("en", 0.5, [("en", 0.5), ("fr", 0.4)])])
     recognizer = _recognizer(tmp_path, model, threshold=0.75)
 
     with pytest.raises(UncertainLanguageError) as captured:
@@ -277,12 +273,13 @@ async def test_automatic_language_rejects_low_confidence(tmp_path: Path) -> None
 
     assert captured.value.details["confidence_threshold"] == 0.75
     assert captured.value.details["candidates"][0]["language"] == "en"
-    assert len(model.calls) == 1
+    # An uncertain language must not spend a decode pass.
+    assert model.calls == []
 
 
 @pytest.mark.asyncio
 async def test_automatic_language_rejects_no_supported_candidates(tmp_path: Path) -> None:
-    model = FakeModel([([], FakeInfo("xx", 0.99, all_language_probs=[("xx", 0.99)]))])
+    model = FakeModel([], detections=[("xx", 0.99, [("xx", 0.99)])])
     recognizer = _recognizer(tmp_path, model)
 
     with pytest.raises(UncertainLanguageError) as captured:
@@ -294,10 +291,8 @@ async def test_automatic_language_rejects_no_supported_candidates(tmp_path: Path
 @pytest.mark.asyncio
 async def test_chinese_uses_configured_default_script(tmp_path: Path) -> None:
     model = FakeModel(
-        [
-            ([], FakeInfo("zh", 0.95)),
-            ([_speech_segment("漢語")], FakeInfo("zh", 0.95)),
-        ]
+        [([_speech_segment("漢語")], FakeInfo("zh", 0.95))],
+        detections=[("zh", 0.95, [("zh", 0.95)])],
     )
     recognizer = _recognizer(tmp_path, model)
 
@@ -431,3 +426,27 @@ def test_default_model_factory_passes_production_settings(
         "download_root": str(download_root),
         "local_files_only": True,
     }
+
+
+def test_default_audio_loader_resamples_to_the_detection_rate(tmp_path: Path) -> None:
+    """Whisper's feature extractor is fixed at 16 kHz.
+
+    Handing it audio at the file's own rate would shift every mel frame and
+    quietly skew language detection, so the loader has to resample rather than
+    just read.
+    """
+
+    source = tmp_path / "tone.wav"
+    source_rate = 8000
+    frames = source_rate // 2
+    with wave.open(str(source), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(source_rate)
+        handle.writeframes(bytes([0x00, 0x10]) * frames)
+
+    audio = FasterWhisperSpeechRecognizer._decode_audio(str(source))
+
+    assert audio.ndim == 1
+    assert audio.dtype == np.float32
+    assert audio.shape[0] == pytest.approx(frames * 2, rel=0.05)

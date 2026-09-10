@@ -11,6 +11,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from speech_intelligence_api.adapters.observability import ServiceObservability
 from speech_intelligence_api.application.readiness import ReadinessCheck
 from speech_intelligence_api.application.transcriptions import BatchTranscriptionService
+from speech_intelligence_api.domain.enums import SUPPORTED_LANGUAGE_VARIANTS, LanguageCode
 from speech_intelligence_api.entrypoints.http.app import create_app
 from speech_intelligence_api.ports.rate_limiting import RateLimitDecision
 from tests.factories import TEST_API_KEY, make_settings
@@ -209,7 +210,8 @@ def test_capabilities_return_native_script_contract(
     payload = response.json()
     assert payload["transcription_task"] == "transcribe"
     assert payload["translation_enabled"] is False
-    assert len(payload["languages"]) == 25
+    assert len(payload["languages"]) == len(SUPPORTED_LANGUAGE_VARIANTS)
+    assert {item["code"] for item in payload["languages"]} == {code.value for code in LanguageCode}
     assert {item["chinese_script"] for item in payload["languages"] if item["code"] == "zh"} == {
         "simplified",
         "traditional",

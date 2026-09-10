@@ -33,6 +33,16 @@ class LanguageCode(StrEnum):
     DANISH = "da"
     HEBREW = "he"
     UKRAINIAN = "uk"
+    BENGALI = "bn"
+    CATALAN = "ca"
+    CROATIAN = "hr"
+    CZECH = "cs"
+    FINNISH = "fi"
+    GREEK = "el"
+    HUNGARIAN = "hu"
+    ROMANIAN = "ro"
+    SLOVAK = "sk"
+    URDU = "ur"
 
 
 class ChineseScript(StrEnum):
@@ -183,4 +193,14 @@ SUPPORTED_LANGUAGE_VARIANTS: tuple[LanguageVariant, ...] = (
     LanguageVariant("Danish", LanguageCode.DANISH),
     LanguageVariant("Hebrew", LanguageCode.HEBREW),
     LanguageVariant("Ukrainian", LanguageCode.UKRAINIAN),
+    LanguageVariant("Bengali", LanguageCode.BENGALI),
+    LanguageVariant("Catalan", LanguageCode.CATALAN),
+    LanguageVariant("Croatian", LanguageCode.CROATIAN),
+    LanguageVariant("Czech", LanguageCode.CZECH),
+    LanguageVariant("Finnish", LanguageCode.FINNISH),
+    LanguageVariant("Greek", LanguageCode.GREEK),
+    LanguageVariant("Hungarian", LanguageCode.HUNGARIAN),
+    LanguageVariant("Romanian", LanguageCode.ROMANIAN),
+    LanguageVariant("Slovak", LanguageCode.SLOVAK),
+    LanguageVariant("Urdu", LanguageCode.URDU),
 )

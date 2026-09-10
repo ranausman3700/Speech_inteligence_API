@@ -78,6 +78,10 @@ class ConversationAssembler:
             raw_transcript=transcript.text.strip(),
             formatted_transcript=formatted,
             segments=segments,
+            # `labels` always seeds the unknown bucket, so the real people are
+            # whatever it grew by. Counting turns instead would report speakers
+            # that ended up with no words attributed to them.
+            speaker_count=len(labels) - 1,
         )
 
     @staticmethod

@@ -67,6 +67,7 @@ async def get_job_result(
             chinese_script=conversation.chinese_script,
             duration_seconds=outcome.duration_seconds,
             raw_transcript=conversation.raw_transcript,
+            speaker_count=conversation.speaker_count,
             formatted_transcript=conversation.formatted_transcript,
             segments=[_conversation_segment_response(segment) for segment in conversation.segments],
         )

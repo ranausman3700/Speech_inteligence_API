@@ -36,9 +36,48 @@ from speech_intelligence_api.domain.models import (
 from tests.factories import make_job
 
 
-def test_supported_language_contract_has_25_variants_and_24_codes() -> None:
-    assert len(SUPPORTED_LANGUAGE_VARIANTS) == 25
-    assert len({variant.code for variant in SUPPORTED_LANGUAGE_VARIANTS}) == 24
+def test_supported_language_contract_covers_every_advertised_language() -> None:
+    # Pinned because automatic detection filters candidates to exactly this set:
+    # a code missing here is silently undetectable rather than merely unlisted.
+    assert {code.value for code in LanguageCode} == {
+        "ar",
+        "bn",
+        "ca",
+        "cs",
+        "da",
+        "de",
+        "el",
+        "en",
+        "es",
+        "fi",
+        "fr",
+        "he",
+        "hi",
+        "hr",
+        "hu",
+        "id",
+        "it",
+        "ja",
+        "ko",
+        "ms",
+        "nl",
+        "no",
+        "pl",
+        "pt",
+        "ro",
+        "ru",
+        "sk",
+        "sv",
+        "th",
+        "tr",
+        "uk",
+        "ur",
+        "vi",
+        "zh",
+    }
+    assert len(SUPPORTED_LANGUAGE_VARIANTS) == 35
+    assert len({variant.code for variant in SUPPORTED_LANGUAGE_VARIANTS}) == 34
+    assert {variant.code for variant in SUPPORTED_LANGUAGE_VARIANTS} == set(LanguageCode)
     chinese_scripts = {
         variant.chinese_script
         for variant in SUPPORTED_LANGUAGE_VARIANTS

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import logging
 from collections.abc import AsyncIterator, Sequence
@@ -12,6 +13,7 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from speech_intelligence_api import __version__
+from speech_intelligence_api.adapters.control_center import ControlCenterClient
 from speech_intelligence_api.adapters.observability import build_observability
 from speech_intelligence_api.adapters.text_documents import PlainTextDocumentRenderer
 from speech_intelligence_api.application.conversations import ConversationSubmissionService
@@ -26,6 +28,7 @@ from speech_intelligence_api.domain.enums import ExportFormat
 from speech_intelligence_api.entrypoints.http.dependencies import authenticate_api_key
 from speech_intelligence_api.entrypoints.http.errors import install_exception_handlers
 from speech_intelligence_api.entrypoints.http.middleware import (
+    ControlCenterUsageMiddleware,
     ObservabilityMiddleware,
     RequestBodyLimitMiddleware,
     RequestIdMiddleware,
@@ -75,6 +78,15 @@ def create_app(
     docs_url = "/docs" if resolved_settings.docs_enabled else None
     openapi_url = "/openapi.json" if resolved_settings.docs_enabled else None
 
+    control_center_client: ControlCenterClient | None = None
+    if resolved_settings.control_center_enabled:
+        service_key = resolved_settings.control_center_service_key
+        control_center_client = ControlCenterClient(
+            base_url=resolved_settings.control_center_base_url,
+            service_key=service_key.get_secret_value() if service_key is not None else "",
+            timeout_seconds=resolved_settings.control_center_timeout_seconds,
+        )
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if runtime is not None and runtime.cleanup_service is not None:
@@ -88,8 +100,15 @@ def create_app(
                 if runtime is not None:
                     await runtime.close()
             finally:
-                if owns_observability:
-                    await resolved_observability.close()
+                try:
+                    if control_center_client is not None:
+                        pending = app.state.control_center_tasks
+                        if pending:
+                            await asyncio.gather(*pending, return_exceptions=True)
+                        await control_center_client.aclose()
+                finally:
+                    if owns_observability:
+                        await resolved_observability.close()
 
     app = FastAPI(
         title="Speech Intelligence API",
@@ -107,6 +126,8 @@ def create_app(
     )
     app.state.settings = resolved_settings
     app.state.authenticator = ApiKeyAuthenticator(resolved_settings)
+    app.state.control_center_client = control_center_client
+    app.state.control_center_tasks = set()
     app.state.readiness_service = ReadinessService(tuple(readiness_checks))
     app.state.transcription_service = transcription_service
     app.state.export_service = _export_service(resolved_settings)
@@ -160,6 +181,7 @@ def create_app(
         ObservabilityMiddleware,
         observability=resolved_observability,
     )
+    app.add_middleware(ControlCenterUsageMiddleware)
     app.add_middleware(
         RequestIdMiddleware,
         header_name=resolved_settings.request_id_header,

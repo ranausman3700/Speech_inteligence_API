@@ -489,6 +489,7 @@ def _dump_result(result: JobResult) -> str:
                 ),
                 "raw_transcript": conversation.raw_transcript,
                 "formatted_transcript": conversation.formatted_transcript,
+                "speaker_count": conversation.speaker_count,
                 "segments": [_segment_data(segment) for segment in conversation.segments],
             }
         )
@@ -523,6 +524,7 @@ def _load_result(serialized: str) -> JobResult:
                 raw_transcript=str(data["raw_transcript"]),
                 formatted_transcript=str(data["formatted_transcript"]),
                 segments=segments,
+                speaker_count=int(data.get("speaker_count", 0)),
             ),
             duration_seconds=float(data["duration_seconds"]),
         )

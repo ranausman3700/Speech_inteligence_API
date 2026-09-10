@@ -31,6 +31,9 @@ from speech_intelligence_api.ports.observability import Observability
 
 logger = logging.getLogger(__name__)
 
+#: Whisper's feature extractor is fixed at 16 kHz, so detection audio must match.
+_DETECTION_SAMPLE_RATE_HZ = 16000
+
 
 class _WhisperWord(Protocol):
     word: str
@@ -61,8 +64,17 @@ class _WhisperModel(Protocol):
     ) -> tuple[Iterable[_WhisperSegment], _WhisperInfo]:
         """Match the subset of Faster-Whisper used by this adapter."""
 
+    def detect_language(
+        self,
+        **kwargs: Any,
+    ) -> tuple[str, float, list[tuple[str, float]]]:
+        """Return the winning language, its probability, and every candidate."""
+
 
 ModelFactory = Callable[[str], _WhisperModel]
+#: Decodes a normalized audio file into the 16 kHz mono float array that
+#: language detection scores. Injected so tests never touch real audio.
+AudioLoader = Callable[[str], Any]
 
 
 class FasterWhisperSpeechRecognizer:
@@ -74,11 +86,13 @@ class FasterWhisperSpeechRecognizer:
         store: LocalEphemeralBlobStore,
         *,
         model_factory: ModelFactory | None = None,
+        audio_loader: AudioLoader | None = None,
         observability: Observability | None = None,
     ) -> None:
         self._settings = settings
         self._store = store
         self._model_factory = model_factory or self._build_model
+        self._audio_loader = audio_loader or self._decode_audio
         self._observability = observability or NoopObservability()
         self._models: dict[str, _WhisperModel] = {}
         self._model_lock = asyncio.Lock()
@@ -195,6 +209,9 @@ class FasterWhisperSpeechRecognizer:
             condition_on_previous_text=not request.draft,
             word_timestamps=request.word_timestamps and not request.draft,
             hotwords=", ".join(request.vocabulary) if request.vocabulary else None,
+            # Live partials get replaced by the final result, so priming them
+            # would spend context on text nobody keeps.
+            initial_prompt=None if request.draft else self._settings.asr_initial_prompt,
             vad_filter=True,
         )
         source_segments = list(raw_segments)
@@ -219,29 +236,44 @@ class FasterWhisperSpeechRecognizer:
             chinese_script=chinese_script,
         )
 
+    @staticmethod
+    def _decode_audio(audio_path: str) -> Any:
+        from faster_whisper.audio import decode_audio  # type: ignore[import-untyped]
+
+        return decode_audio(audio_path, sampling_rate=_DETECTION_SAMPLE_RATE_HZ)
+
     def _detect_supported_language(
         self,
         model: _WhisperModel,
         audio_path: str,
     ) -> tuple[LanguageCode, float]:
-        _, info = model.transcribe(
-            audio_path,
-            language=None,
-            task="transcribe",
-            beam_size=1,
-            word_timestamps=False,
+        """Score the audio with the detection head instead of a throwaway decode.
+
+        `transcribe` would decode text this pass immediately discards, which is
+        what made automatic mode cost a second pass. `detect_language` stops at
+        the encoder, so choosing the language costs about a second rather than a
+        full transcription.
+
+        A threshold of 1.0 never trips the early exit, so every inspected window
+        votes. The winning vote and the final window's distribution are merged
+        because the former is the more robust signal while only the latter
+        exposes the runner-up probabilities an uncertain result reports.
+        """
+
+        language, language_probability, all_language_probs = model.detect_language(
+            audio=self._audio_loader(audio_path),
             vad_filter=True,
             language_detection_segments=self._settings.asr_language_detection_segments,
             language_detection_threshold=1.0,
         )
         candidates_by_code: dict[str, float] = {}
-        for code, probability in info.all_language_probs or ():
+        for code, probability in all_language_probs or ():
             if code in self._supported_codes:
                 candidates_by_code[code] = max(candidates_by_code.get(code, 0.0), probability)
-        if info.language in self._supported_codes:
-            candidates_by_code[info.language] = max(
-                candidates_by_code.get(info.language, 0.0),
-                info.language_probability,
+        if language in self._supported_codes:
+            candidates_by_code[language] = max(
+                candidates_by_code.get(language, 0.0),
+                language_probability,
             )
 
         candidates = tuple(

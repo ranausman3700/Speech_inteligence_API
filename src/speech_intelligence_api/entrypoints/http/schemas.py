@@ -300,4 +300,5 @@ class JobConversationResultResponse(ApiSchema):
     duration_seconds: float
     raw_transcript: str
     formatted_transcript: str
+    speaker_count: int
     segments: list[ConversationSegmentResponse]
